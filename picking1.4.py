@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import glob
 from datetime import time, datetime
 import plotly.express as px
 import json
@@ -17,11 +16,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# [오류 수정] days_order 변수를 전역 상수로 정의하여 프로그램 전체에서 사용
+# [수정] 요일 순서 전역 상수로 정의
 DAYS_ORDER = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
 
 # --------------------------------------------------------------------------
-# 설정 파일 처리 및 데이터 처리 함수
+# 설정 파일 처리
 # --------------------------------------------------------------------------
 CONFIG_FILE = "config.json"
 
@@ -30,8 +29,8 @@ def save_config(config_data):
         json.dump(config_data, f)
 
 def load_config():
+    # [수정] 폴더 경로 설정 제거
     default_config = {
-        'last_folder_path': '',
         'minute_threshold': 30,
         'picking_count_threshold': 0
     }
@@ -40,32 +39,37 @@ def load_config():
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 config = json.load(f)
                 default_config.update(config)
-                return default_config
         except (json.JSONDecodeError, FileNotFoundError):
-            return default_config
+            pass
     return default_config
 
+# --------------------------------------------------------------------------
+# 데이터 처리 함수
+# --------------------------------------------------------------------------
 def convert_time_to_seconds(t):
     if isinstance(t, (time, datetime)):
         return t.hour * 3600 + t.minute * 60 + t.second
     return np.nan
 
 @st.cache_data
-def load_and_process_data(folder_path):
-    file_pattern = os.path.join(folder_path, '피킹바코드입력-*.xlsm')
-    file_list = glob.glob(file_pattern)
-    if not file_list: return pd.DataFrame(), pd.DataFrame()
+def load_and_process_data(uploaded_files):
+    if not uploaded_files:
+        return pd.DataFrame(), pd.DataFrame()
 
     valid_data_list, all_workers_list = [], []
-    for file in file_list:
+    # [수정] 폴더 경로 대신 업로드된 파일 목록으로 루프 실행
+    for uploaded_file in uploaded_files:
         try:
-            date_str = os.path.basename(file).replace('피킹바코드입력-', '').replace('.xlsm', '')
+            # [수정] 업로드된 파일 이름에서 날짜 추출
+            date_str = os.path.basename(uploaded_file.name).replace('피킹바코드입력-', '').split('.')[0]
             pickup_date = pd.to_datetime(date_str, format='%Y%m%d')
             
             if pickup_date.weekday() == 6: continue
 
-            df = pd.read_excel(file, sheet_name='작업자현황', header=2, usecols=['작업자명', '피킹횟수', '1회평균분'],
+            # [수정] 업로드된 파일 객체를 직접 읽음
+            df = pd.read_excel(uploaded_file, sheet_name='작업자현황', header=2, usecols=['작업자명', '피킹횟수', '1회평균분'],
                                dtype={'작업자명': str, '피킹횟수': str, '1회평균분': str})
+            
             df.dropna(subset=['작업자명'], inplace=True)
             df = df[df['작업자명'].str.strip() != '']
             if df.empty: continue
@@ -79,7 +83,8 @@ def load_and_process_data(folder_path):
             df['유효시간'] = temp_time
             df.dropna(subset=['유효시간'], inplace=True)
             if not df.empty: valid_data_list.append(df)
-        except Exception:
+        except Exception as e:
+            st.error(f"{uploaded_file.name} 파일 처리 중 오류 발생: {e}")
             continue
             
     if not valid_data_list: return pd.DataFrame(), pd.DataFrame()
@@ -93,7 +98,6 @@ def load_and_process_data(folder_path):
     valid_master_df['월'] = valid_master_df['날짜'].dt.month
     valid_master_df['일'] = valid_master_df['날짜'].dt.day
     valid_master_df['연월'] = valid_master_df['날짜'].dt.to_period('M').astype(str)
-    
     days_map = {i: day for i, day in enumerate(DAYS_ORDER)}
     valid_master_df['요일'] = valid_master_df['날짜'].dt.weekday.map(days_map)
     valid_master_df['요일'] = pd.Categorical(valid_master_df['요일'], categories=DAYS_ORDER, ordered=True)
@@ -108,22 +112,27 @@ st.title("LPI TEAM 피킹 작업 성과 분석 대시보드")
 st.header("1. 분석 설정")
 
 config = load_config()
-col1, col2, col3 = st.columns(3)
+
+# [수정] 폴더 경로 입력 대신 파일 업로드 UI로 변경
+uploaded_files = st.file_uploader(
+    "분석할 엑셀 파일을 업로드하세요.",
+    type=['xlsx', 'xlsm'],
+    accept_multiple_files=True
+)
+
+col1, col2 = st.columns(2)
 with col1:
-    folder_path = st.text_input('분석할 폴더 경로:', value=config['last_folder_path'])
-with col2:
     minute_threshold = st.number_input('평균 소요시간 제외 기준 (분):', min_value=0, value=config['minute_threshold'])
-with col3:
+with col2:
     picking_count_threshold = st.number_input('일일 피킹횟수 제외 기준 (건):', min_value=0, value=config['picking_count_threshold'])
 
 base_data, all_workers = pd.DataFrame(), pd.DataFrame()
-if folder_path and os.path.isdir(folder_path):
-    base_data, all_workers = load_and_process_data(folder_path)
+# [수정] 업로드된 파일이 있을 경우에만 데이터 처리 실행
+if uploaded_files:
+    base_data, all_workers = load_and_process_data(uploaded_files)
     if not base_data.empty:
         base_data = base_data[base_data['평균소요시간(분)'] <= minute_threshold].copy()
         base_data = base_data[base_data['피킹횟수'] >= picking_count_threshold].copy()
-elif folder_path:
-    st.error("폴더 경로가 유효하지 않습니다.")
 
 filtered_data = base_data.copy()
 filtered_all_workers = all_workers.copy()
@@ -167,9 +176,9 @@ if not base_data.empty:
 
 if st.button('분석 시작', type="primary"):
     if filtered_data.empty and filtered_all_workers.empty:
-        st.warning("분석할 데이터가 없습니다.")
+        st.warning("분석할 데이터가 없습니다. 파일을 먼저 업로드해주세요.")
     else:
-        current_config = {'last_folder_path': folder_path, 'minute_threshold': minute_threshold, 'picking_count_threshold': picking_count_threshold}
+        current_config = {'minute_threshold': minute_threshold, 'picking_count_threshold': picking_count_threshold}
         save_config(current_config)
         
         total_picks = filtered_data['피킹횟수'].sum()
@@ -245,7 +254,6 @@ if st.button('분석 시작', type="primary"):
                 dow_analysis['횟수순위'] = dow_analysis['총_피킹횟수'].rank(method='min', ascending=False).astype(int)
                 
                 dow_display_cols = ['요일', '평균소요시간_분', '시간순위', '총_피킹횟수', '횟수순위', '작업일수', '일평균_피킹횟수']
-                # [오류 수정] 전역 변수 DAYS_ORDER를 사용하여 정렬
                 st.dataframe(dow_analysis[dow_display_cols].sort_values(by='요일', key=lambda x: x.map({day: i for i, day in enumerate(DAYS_ORDER)})), hide_index=True)
                 
                 fig_dow_time = px.bar(dow_analysis, x='요일', y='평균소요시간_분', title='요일별 평균 피킹 소요시간 (분)', text_auto=True)
