@@ -16,11 +16,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# [수정] 요일 순서 전역 상수로 정의
 DAYS_ORDER = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
 
 # --------------------------------------------------------------------------
-# 설정 파일 처리
+# 설정 파일 처리 및 데이터 처리 함수
 # --------------------------------------------------------------------------
 CONFIG_FILE = "config.json"
 
@@ -29,11 +28,7 @@ def save_config(config_data):
         json.dump(config_data, f)
 
 def load_config():
-    # [수정] 폴더 경로 설정 제거
-    default_config = {
-        'minute_threshold': 30,
-        'picking_count_threshold': 0
-    }
+    default_config = {'minute_threshold': 30, 'picking_count_threshold': 0}
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -43,9 +38,6 @@ def load_config():
             pass
     return default_config
 
-# --------------------------------------------------------------------------
-# 데이터 처리 함수
-# --------------------------------------------------------------------------
 def convert_time_to_seconds(t):
     if isinstance(t, (time, datetime)):
         return t.hour * 3600 + t.minute * 60 + t.second
@@ -57,19 +49,15 @@ def load_and_process_data(uploaded_files):
         return pd.DataFrame(), pd.DataFrame()
 
     valid_data_list, all_workers_list = [], []
-    # [수정] 폴더 경로 대신 업로드된 파일 목록으로 루프 실행
     for uploaded_file in uploaded_files:
         try:
-            # [수정] 업로드된 파일 이름에서 날짜 추출
             date_str = os.path.basename(uploaded_file.name).replace('피킹바코드입력-', '').split('.')[0]
             pickup_date = pd.to_datetime(date_str, format='%Y%m%d')
             
             if pickup_date.weekday() == 6: continue
 
-            # [수정] 업로드된 파일 객체를 직접 읽음
             df = pd.read_excel(uploaded_file, sheet_name='작업자현황', header=2, usecols=['작업자명', '피킹횟수', '1회평균분'],
                                dtype={'작업자명': str, '피킹횟수': str, '1회평균분': str})
-            
             df.dropna(subset=['작업자명'], inplace=True)
             df = df[df['작업자명'].str.strip() != '']
             if df.empty: continue
@@ -83,8 +71,8 @@ def load_and_process_data(uploaded_files):
             df['유효시간'] = temp_time
             df.dropna(subset=['유효시간'], inplace=True)
             if not df.empty: valid_data_list.append(df)
-        except Exception as e:
-            st.error(f"{uploaded_file.name} 파일 처리 중 오류 발생: {e}")
+        except Exception:
+            # [수정] 개별 파일 오류 메시지를 표시하지 않고 그냥 건너뜀
             continue
             
     if not valid_data_list: return pd.DataFrame(), pd.DataFrame()
@@ -113,7 +101,6 @@ st.header("1. 분석 설정")
 
 config = load_config()
 
-# [수정] 폴더 경로 입력 대신 파일 업로드 UI로 변경
 uploaded_files = st.file_uploader(
     "분석할 엑셀 파일을 업로드하세요.",
     type=['xlsx', 'xlsm'],
@@ -127,7 +114,6 @@ with col2:
     picking_count_threshold = st.number_input('일일 피킹횟수 제외 기준 (건):', min_value=0, value=config['picking_count_threshold'])
 
 base_data, all_workers = pd.DataFrame(), pd.DataFrame()
-# [수정] 업로드된 파일이 있을 경우에만 데이터 처리 실행
 if uploaded_files:
     base_data, all_workers = load_and_process_data(uploaded_files)
     if not base_data.empty:
@@ -138,6 +124,12 @@ filtered_data = base_data.copy()
 filtered_all_workers = all_workers.copy()
 
 if not base_data.empty:
+    # [수정] 파일 수와 기간만 요약해서 표시
+    successful_file_count = base_data['날짜'].nunique()
+    start_date = base_data['날짜'].min().strftime('%Y-%m-%d')
+    end_date = base_data['날짜'].max().strftime('%Y-%m-%d')
+    st.info(f"총 {successful_file_count}개 파일의 데이터를 성공적으로 불러왔습니다. (기간: {start_date} ~ {end_date})")
+    
     st.subheader("기간 필터")
     filter_col1, filter_col2, filter_col3 = st.columns(3)
     with filter_col1:
